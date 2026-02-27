@@ -30,6 +30,7 @@ const {
 } = baileysModule.default || baileysModule;
 
 import NodeCache from 'node-cache';
+global.crypto = crypto;
 const { chain } = lodash;
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3000;
 let stopped = 'close';
