@@ -70,7 +70,7 @@
     "human-readable": "^0.2.1",
     "imagemaker.js": "^2.0.3",
     "imapflow": "*",
-    "jimp": "^1.6.0",
+    "jimp": "0.16.13",
     "jsdom": "^19.0.0",
     "libphonenumber-js": "*",
     "link-preview-js": "^3.0.0",
@@ -109,9 +109,6 @@
     "ytdl-core": "*",
     "yt-search": "^2.10.3",
     "axios-cookiejar-support": "*"
-  },
-  "overrides": {
-    "jimp": "0.16.13"
   },
   "optionalDependencies": {
     "puppeteer": "*",
