@@ -12,6 +12,8 @@ import store from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Import CommonJS module with default import pattern
+import pkg from "@whiskeysockets/baileys";
 const {
     default: _makeWaSocket,
     makeWALegacySocket,
@@ -27,7 +29,7 @@ const {
     getAggregateVotesInPollMessage,
     prepareWAMessageMedia,
     WA_DEFAULT_EPHEMERAL,
-} = await import("@whiskeysockets/baileys");
+} = pkg;
 
 export function makeWASocket(connectionOptions, options = {}) {
     const conn = (global.opts["legacy"] ? makeWALegacySocket : _makeWaSocket)(
@@ -1319,4 +1321,4 @@ function getRandom() {
 
 function nullish(args) {
     return !(args !== null && args !== undefined);
-}
+                    }
