@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { platform } from 'process';
 import fs, { readdirSync, statSync, unlinkSync, existsSync, readFileSync, watch } from 'fs';
 import yargs from 'yargs';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 import lodash from 'lodash';
 import chalk from 'chalk';
@@ -19,14 +20,14 @@ import { initializeSubBots } from './src/libraries/subBotManager.js';
 import { Low, JSONFile } from 'lowdb';
 import store from './src/libraries/store.js';
 import LidResolver from './src/libraries/LidResolver.js';
-
+const baileysModule = await import('@whiskeysockets/baileys');
 const {
     DisconnectReason,
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     jidNormalizedUser
-} = await import('@whiskeysockets/baileys');
+} = baileysModule.default || baileysModule;
 
 import NodeCache from 'node-cache';
 const { chain } = lodash;
