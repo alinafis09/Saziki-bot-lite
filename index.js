@@ -1,139 +1,311 @@
-import { join, dirname } from 'path';
-import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
-import { setupMaster, fork } from 'cluster';
-import cfonts from 'cfonts';
-import yargs from 'yargs';
-import chalk from 'chalk';
-import fs from 'fs';
+// =============================================================
+//  index.js — Process Supervisor / Launcher
+//
+//  Responsibility:
+//    • Display a startup dashboard (cfonts banner + system table)
+//    • Spawn main.js as a child process with IPC
+//    • Auto-restart on non-zero exit codes (crash recovery)
+//    • Forward stdin lines as IPC messages to the child
+//      (used by manual terminal commands, ignored on Pterodactyl
+//       where there is no stdin — safe either way)
+//
+//  This file does NOT contain any WhatsApp / Baileys logic.
+//  All WA logic lives in main.js.
+// =============================================================
+
+// ── Config must be imported first so global.info is available ──
 import './config.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(__dirname);
-const { say } = cfonts;
+import { join, dirname }      from 'path';
+import { fileURLToPath }      from 'url';
+import { createInterface }    from 'readline';
+import { promises as fsp }    from 'fs';
+import fs                     from 'fs';
+import { spawn }              from 'child_process';
+
+import chalk                  from 'chalk';
+import cfont                  from 'cfonts';
+import axios                  from 'axios';
+import os                     from 'os';
+import moment                 from 'moment-timezone';
+import yargs                  from 'yargs';
+import express                from 'express';
+import { sizeFormatter }      from 'human-readable';
+import { fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+
+// ── ESM __dirname shim ────────────────────────────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
+
+// =============================================================
+//  HELPERS
+// =============================================================
+
+/** Human-readable byte formatter (JEDEC: KB, MB, GB…) */
+const formatSize = sizeFormatter({
+  std:                'JEDEC',
+  decimalPlaces:      2,
+  keepTrailingZeroes: false,
+  render: (literal, symbol) => `${literal} ${symbol}B`,
+});
+
+/** Count files and sub-folders directly inside a directory. */
+function getTotalFoldersAndFiles(folderPath) {
+  return new Promise((resolve, reject) => {
+    fs.readdir(folderPath, (err, entries) => {
+      if (err) return reject(err);
+
+      let folders    = 0;
+      let filesCount = 0;
+
+      for (const entry of entries) {
+        const stat = fs.statSync(join(folderPath, entry));
+        if (stat.isDirectory()) folders++;
+        else filesCount++;
+      }
+
+      resolve({ folders, files: filesCount });
+    });
+  });
+}
+
+// =============================================================
+//  STARTUP BANNER
+// =============================================================
+
+cfont.say(global.info.figlet, {
+  font:               'simpleBlock',
+  align:              'center',
+  gradient:           ['yellow', 'cyan', 'red'],
+  transitionGradient: true,   // boolean, not a number
+});
+
+cfont.say('by ' + global.info.nameown, {
+  font:   'tiny',
+  align:  'center',
+  colors: ['white'],
+});
+
+// =============================================================
+//  EXPRESS KEEP-ALIVE SERVER
+//  Pterodactyl / hosting panels sometimes require an open HTTP
+//  port to mark the server as "running".  This tiny Express
+//  server satisfies that requirement without interfering with
+//  any bot logic.
+// =============================================================
+
+const app  = express();
+const port = process.env.PORT || 7860;
+
+app.get('/', (_req, res) => res.send(`${global.info.namebot} is running ✅`));
+
+app.listen(port, () => {
+  console.log(chalk.green(`⚡ Keep-alive server on port ${port}`));
+});
+
+// =============================================================
+//  TMP FOLDER GUARD
+//  Create ./tmp if it doesn't exist so plugins can write temp
+//  files immediately without needing their own mkdir calls.
+// =============================================================
+
+const tmpFolder = join(__dirname, 'tmp');
+if (!fs.existsSync(tmpFolder)) {
+  fs.mkdirSync(tmpFolder, { recursive: true });
+  console.log(chalk.green('[INDEX] ./tmp folder created.'));
+}
+
+// =============================================================
+//  SYSTEM DASHBOARD TABLE
+//  Shown once at startup.  Uses a try/catch around the IP fetch
+//  so a network failure doesn't prevent the bot from starting.
+// =============================================================
+
+async function printDashboard() {
+  const packageJsonPath = join(__dirname, 'package.json');
+  const pluginsFolder   = join(__dirname, 'plugins');
+
+  // Ensure plugins folder exists before counting
+  if (!fs.existsSync(pluginsFolder)) {
+    fs.mkdirSync(pluginsFolder, { recursive: true });
+  }
+
+  let pluginCount = 0;
+  let baileyVer   = 'unknown';
+  let publicIP    = 'unavailable';
+  let pkgName     = global.info.namebot;
+  let pkgVersion  = '1.0.0';
+  let pkgDesc     = global.info.description;
+
+  // ── Baileys version ──────────────────────────────────────
+  try {
+    const { version } = await fetchLatestBaileysVersion();
+    baileyVer = version.join('.');
+    console.log(
+      chalk.bgGreen(chalk.white(`[INDEX] Baileys v${baileyVer} detected.`))
+    );
+  } catch {
+    console.error(chalk.bgRed(chalk.white('[INDEX] Could not fetch Baileys version.')));
+  }
+
+  // ── Plugin count ─────────────────────────────────────────
+  try {
+    const counts = await getTotalFoldersAndFiles(pluginsFolder);
+    pluginCount  = counts.files;
+  } catch { /* folder empty or not yet created */ }
+
+  // ── package.json ─────────────────────────────────────────
+  try {
+    const raw = await fsp.readFile(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(raw);
+    pkgName    = pkg.name    ?? pkgName;
+    pkgVersion = pkg.version ?? pkgVersion;
+    pkgDesc    = pkg.description ?? pkgDesc;
+  } catch (err) {
+    console.error(chalk.red(`[INDEX] Cannot read package.json: ${err.message}`));
+  }
+
+  // ── Public IP ────────────────────────────────────────────
+  try {
+    const { data } = await axios.get('https://api.ipify.org', { timeout: 5000 });
+    publicIP = data;
+  } catch { /* no internet / blocked — non-fatal */ }
+
+  // ── RAM ──────────────────────────────────────────────────
+  const ramTotal = (os.totalmem()  / 1024 ** 3).toFixed(2);
+  const ramFree  = (os.freemem()   / 1024 ** 3).toFixed(2);
+
+  console.table({
+    '⎔ Dashboard':  ' System ⎔',
+    'Name Bot':     pkgName,
+    'Version':      pkgVersion,
+    'Description':  pkgDesc,
+    'OS':           `${os.type()} ${os.release()}`,
+    'Memory':       `${ramFree} / ${ramTotal} GB`,
+    'IP':           publicIP,
+    'Baileys':      `v${baileyVer}`,
+    'Owner':        global.info.nomerown,
+    'Features':     `${pluginCount} plugin(s)`,
+    'Creator':      global.info.nameown,
+  });
+}
+
+// =============================================================
+//  CHILD PROCESS SUPERVISOR
+// =============================================================
 
 let isRunning = false;
-let childProcess = null;
 
-console.log(chalk.yellow.bold('—◉ㅤIniciando sistema...'));
-
-function ensureAuthFolder() {
-  const authPath = join(__dirname, global.authFile);
-  if (!fs.existsSync(authPath)) {
-    fs.mkdirSync(authPath, { recursive: true });
-  }
-}
-
-function hasCredentials() {
-  const credsPath = join(__dirname, global.authFile, 'creds.json');
-  return fs.existsSync(credsPath);
-}
-
-function formatPhoneNumber(number) {
-  let formatted = number.replace(/[^\d+]/g, '');
-  if (formatted.startsWith('+52') && !formatted.startsWith('+521')) {
-    formatted = formatted.replace('+52', '+521');
-  } else if (formatted.startsWith('52') && !formatted.startsWith('521')) {
-    formatted = `+521${formatted.slice(2)}`;
-  } else if (formatted.startsWith('52') && formatted.length >= 12) {
-    formatted = `+${formatted}`;
-  } else if (!formatted.startsWith('+')) {
-    formatted = `+${formatted}`;
-  }
-  return formatted;
-}
-
-function isValidPhoneNumber(phoneNumber) {
-  const regex = /^\+\d{7,15}$/;
-  return regex.test(phoneNumber);
-}
-
+/**
+ * Spawn `main.js` (or any target file) as a supervised child.
+ *
+ * IPC channel is opened so main.js can send messages like
+ *   process.send('reset')
+ *   process.send('uptime')
+ * and the supervisor reacts accordingly.
+ *
+ * On Pterodactyl (no terminal): stdin is simply ignored when
+ * no human is typing — the rl.on('line') handler is harmless.
+ */
 async function start(file) {
   if (isRunning) return;
   isRunning = true;
 
-  say('SaZiki\nBot', {
-    font: 'chrome',
-    align: 'center',
-    gradient: ['red', 'magenta'],
+  const targetPath = join(__dirname, file);
+  const args       = [targetPath, ...process.argv.slice(2)];
+
+  const child = spawn(process.argv[0], args, {
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    // Pass current env so the child inherits NODE_PATH, etc.
+    env: process.env,
   });
 
-  say('Bot Saziki || By Ali Nafis', {
-    font: 'console',
-    align: 'center',
-    gradient: ['red', 'magenta'],
-  });
+  // ── IPC messages from main.js ────────────────────────────
+  child.on('message', (data) => {
+    console.log(chalk.magenta('[IPC] Received:', data));
 
-  ensureAuthFolder();
-
-  const args = [join(__dirname, file), ...process.argv.slice(2)];
-
-  if (hasCredentials()) {
-    setupMaster({ exec: args[0], args: args.slice(1) });
-    forkProcess(file);
-    return;
-  }
-
-  if (!global.botnumber) {
-    console.log(chalk.bgRed(chalk.white.bold('\n❌ ERROR: No phone number configured.')));
-    console.log(chalk.yellow.bold('Please set global.botnumber in config.js with your WhatsApp number.'));
-    console.log(chalk.white.bold('Example: +5219992095479\n'));
-    process.exit(1);
-  }
-
-  const phoneNumber = formatPhoneNumber(global.botnumber);
-
-  if (!isValidPhoneNumber(phoneNumber)) {
-    console.log(chalk.bgRed(chalk.white.bold('\n❌ ERROR: Invalid phone number format.')));
-    console.log(chalk.yellow.bold('Please ensure your number includes the country code.'));
-    console.log(chalk.white.bold('Example: +5219992095479\n'));
-    process.exit(1);
-  }
-
-  console.log(chalk.green.bold(`—◉ㅤUsing phone number: ${phoneNumber}`));
-  console.log(chalk.green.bold('—◉ㅤInitiating pairing code login...'));
-
-  process.argv.push('--phone=' + phoneNumber.replace('+', ''));
-  process.argv.push('--method=code');
-
-  setupMaster({ exec: args[0], args: args.slice(1) });
-  forkProcess(file);
-}
-
-function forkProcess(file) {
-  childProcess = fork();
-
-  childProcess.on('message', (data) => {
-    console.log(chalk.green.bold('—◉ㅤRECEIVED:'), data);
     switch (data) {
       case 'reset':
-        console.log(chalk.yellow.bold('—◉ㅤRestart request received...'));
-        childProcess.removeAllListeners();
-        childProcess.kill('SIGTERM');
-        isRunning = false;
-        setTimeout(() => start(file), 1000);
+        // Gracefully kill the child; the 'exit' handler will restart it
+        child.kill();
         break;
+
       case 'uptime':
-        childProcess.send(process.uptime());
+        // Reply with the supervisor's own uptime
+        child.send(process.uptime());
+        break;
+
+      default:
+        // Unknown message — log and ignore
         break;
     }
   });
 
-  childProcess.on('exit', (code, signal) => {
-    console.log(chalk.yellow.bold(`—◉ㅤChild process terminated (${code || signal})`));
+  // ── Child exit handler ───────────────────────────────────
+  child.on('exit', (code, signal) => {
     isRunning = false;
-    childProcess = null;
+    console.error(
+      chalk.yellow(`[INDEX] main.js exited — code: ${code ?? 'null'}, signal: ${signal ?? 'none'}`)
+    );
 
-    if (code !== 0 || signal === 'SIGTERM') {
-      console.log(chalk.yellow.bold('—◉ㅤRestarting process...'));
-      setTimeout(() => start(file), 1000);
+    if (code === 0) {
+      // Clean exit (intentional shutdown): wait for a file-change
+      // before restarting.  On Pterodactyl this path is rarely hit.
+      console.log(chalk.cyan('[INDEX] Clean exit detected. Waiting for file change to restart…'));
+      fs.watchFile(targetPath, { interval: 1000 }, () => {
+        fs.unwatchFile(targetPath);
+        start(file);
+      });
+    } else {
+      // Crash / non-zero exit → restart after a brief backoff
+      const delay = 3_000;
+      console.log(chalk.red(`[INDEX] Crash detected. Restarting in ${delay / 1000}s…`));
+      setTimeout(() => start(file), delay);
     }
   });
+
+  // ── Error handler (e.g. ENOENT if node not found) ────────
+  child.on('error', (err) => {
+    isRunning = false;
+    console.error(chalk.bgRed(`[INDEX] Failed to spawn child: ${err.message}`));
+    setTimeout(() => start(file), 5_000);
+  });
+
+  // ── Forward stdin → child via IPC ────────────────────────
+  // Safe to set up even on Pterodactyl: if there's no terminal,
+  // readline simply never emits 'line' events.
+  const opts = new Object(yargs(process.argv.slice(2)).exitProcess(false).parse());
+
+  if (!opts['test']) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    // Prevent multiple listeners accumulating on restart
+    if (rl.listenerCount('line') === 0) {
+      rl.on('line', (line) => {
+        child.send(line.trim());
+      });
+    }
+  }
 }
 
-try {
-  start('main.js');
-} catch (error) {
-  console.error(chalk.red.bold('[ CRITICAL ERROR ]:'), error);
-  process.exit(1);
-}
+// =============================================================
+//  GLOBAL ERROR GUARDS
+//  Prevent the supervisor itself from crashing silently.
+// =============================================================
+
+process.on('uncaughtException', (err) => {
+  console.error(chalk.bgRed('[INDEX] Uncaught exception in supervisor:'), err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error(chalk.bgRed('[INDEX] Unhandled rejection in supervisor:'), reason);
+});
+
+// =============================================================
+//  BOOT SEQUENCE
+// =============================================================
+
+// Print the dashboard first, then launch the bot.
+// Both are async so we chain them properly.
+await printDashboard();
+await start('main.js');
