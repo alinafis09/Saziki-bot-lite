@@ -1,80 +1,99 @@
 // =============================================================
 //  config.js — Global Bot Configuration
-//  All globals set here are available throughout the entire app.
-//  Edit this file before the first run.
+//  ✏️  Edit this file before the first run.
+//  All globals set here are available in every file via `global.*`
 // =============================================================
 
-// ── Owner / Identity ─────────────────────────────────────────
+// ── Bot Identity ──────────────────────────────────────────────
+
+global.info = {
+  /**
+   * Fancy ASCII title shown in the terminal at startup (via cfonts).
+   * Keep it short — long strings wrap badly in small terminals.
+   */
+  figlet: 'MyBot',
+
+  /** Your public / display name as bot creator */
+  nameown: 'NOUREDDINE',
+
+  /**
+   * Owner WhatsApp number — DIGITS ONLY, full international format.
+   * Morocco example: '212612345678'
+   * This number:
+   *   • Receives the "bot is online" notification
+   *   • Is treated as bot owner (all owner-only commands)
+   *   • Is used to request the pairing code (if not already paired)
+   */
+  nomerown: '212600000000',
+
+  /** Human-readable bot name shown in .info / help menus */
+  namebot: 'MyGroupBot',
+
+  /** Short tagline shown in the dashboard table */
+  description: 'WhatsApp group management bot built on Baileys.',
+
+  /**
+   * WhatsApp channel link shown in the connection notification message.
+   * Replace with your own channel URL or leave as ''.
+   */
+  channel: 'https://whatsapp.com/channel/0029VaXXXXXXXXXXXXXXXX',
+};
+
+// ── Pairing & Session ─────────────────────────────────────────
 
 /**
- * Your WhatsApp number in international format (digits only).
- * This is the number that will receive the pairing code AND
- * that will be recognised as the bot owner.
- * Example: '212612345678'  (Morocco +212)
+ * Number that will receive the pairing code at startup (when not yet paired).
+ * Must match info.nomerown in almost all cases.
  */
-global.pairingNumber = '212600000000';
+global.pairingNumber = global.info.nomerown;
 
-/**
- * The same number used as the owner JID source.
- * The JID is built automatically in main.js — just set the
- * digits here and leave the '@s.whatsapp.net' part to the code.
- */
-global.ownerNumber = global.pairingNumber;
+/** Folder where Baileys saves auth / session files */
+global.sessionDir = './sessions';
 
-// ── Bot Personality ──────────────────────────────────────────
-
-/** Display name shown in connection logs and notification messages. */
-global.namebot = 'MyGroupBot';
-
-/** Bot description / tagline (used in .info or help commands). */
-global.desc = 'A WhatsApp group management bot built on Baileys.';
+/** Path to the JSON database file */
+global.databaseFile = './database.json';
 
 // ── Command Prefix ────────────────────────────────────────────
 
 /**
- * Character(s) that trigger commands.
- * Stored as a RegExp-ready string; the actual RegExp is built in main.js.
- * Default  →  ! . / #
+ * Characters that trigger bot commands.
+ * The actual RegExp is built in main.js from this string.
+ * Default: !  .  /  #
  */
 global.prefix = '!./#';
 
-// ── API Keys (add your own as needed) ────────────────────────
+// ── API Registry (optional) ───────────────────────────────────
 
 global.APIs = {
-  // 'myapi': 'https://api.example.com'
+  // Example: 'myapi': 'https://api.example.com'
 };
 
 global.APIKeys = {
-  // 'https://api.example.com': 'YOUR_KEY_HERE'
+  // Example: 'https://api.example.com': 'YOUR_API_KEY'
 };
 
 // ── Feature Flags ─────────────────────────────────────────────
 
-global.settings = {
+global.setting = {
   /**
-   * Auto-clear old session files every 2 hours.
-   * Keeps only creds.json, removes stale pre-keys, etc.
-   * Recommended: true on Pterodactyl to avoid disk bloat.
+   * Prune stale Baileys pre-key files every 2 hours.
+   * Keeps only creds.json.  Recommended: true on Pterodactyl.
    */
   clearSesi: true,
 
   /**
-   * Auto-clean the ./tmp folder every 2 hours.
-   * Files older than 5 minutes are deleted.
+   * Delete ./tmp files older than 5 minutes every 2 hours.
    */
   clearTmp: true,
 
   /**
-   * Send an online notification to the owner when the bot connects.
+   * Send a "bot is online" WhatsApp message to the owner on connect.
    */
   notifyOnConnect: true,
 };
 
-// ── Timezone (used for scheduled tasks / timestamps) ──────────
-global.timezone = 'Africa/Casablanca'; // Change to your server TZ
+// ── Timezone ──────────────────────────────────────────────────
+global.timezone = 'Africa/Casablanca';
 
-// ── Session Folder ────────────────────────────────────────────
-global.sessionDir = './sessions';
-
-// ── Database File ─────────────────────────────────────────────
-global.databaseFile = './database.json';
+// ── Convenience alias (some legacy plugins use global.namebot) ──
+global.namebot = global.info.namebot;
